@@ -1,8 +1,8 @@
 """
 TOUCH PROSTHETICS - EMG CLASSIFICATION SYSTEM
     Author: Daniel Ingham
-    Last Revision: 2022/12/05
-    See Mindrove API documentation for armband API information: https://docs.mindrove.com/UserAPI.html
+    Last Revision: 2022/12/02
+    See Mindrove API documentation: https://docs.mindrove.com/UserAPI.html
 """
 
 import csv
@@ -17,17 +17,10 @@ from mindrove.board_shim import BoardShim, MindRoveInputParams, BoardIds
 from mindrove.data_filter import DataFilter, FilterTypes, DetrendOperations
 from tensorflow import keras
 
-
-movements = ["Rest", "Flexion", "Extension", "Wrist Abduction"]
-
-# Set the batch size and number of epochs the program should use when training
-batch_size = 10
-epochs = 50
-
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 
-def startup_print(startup: bool) -> None:
+def startup_print(startup: bool):
     """Prints the startup and menu options
 
     :param startup: prints the startup banner if true, else just prints the menu options
@@ -71,25 +64,30 @@ def timer_countdown(countdown_time_seconds: int, message: str) -> None:
             print(seconds)
 
 
-def print_movement(number_of_samples: int) -> None:
+def print_movement(sample_num: int) -> None:
     """ Prints the the next movement to be performed when emg acquisition if taking place
 
-    :param number_of_samples: the number of samples that have taken
-    :type number_of_samples: int
+    :param sample_num: the number of samples that have taken
+    :type sample_num: int
     :return: None
     """
-    global movements
-    index = 0
-    if number_of_samples != 5000*len(movements):
-        for _ in movements:
-            index = int(np.floor((number_of_samples+1)/5000))
-        sample_5000 = number_of_samples-5000*index
-
-        if sample_5000 < 2000:
-            print(int((2000 - sample_5000) / 200), end=" ")
-        elif sample_5000 < 5000:
-            if sample_5000 == 2000:
-                print(movements[index])
+    if sample_num < 2000:
+        print(int((2000 - sample_num) / 200), end=" ")
+    elif sample_num < 5000:
+        if sample_num == 2000:
+            print("Rest")
+    elif sample_num < 7000:
+        print(int((7000 - sample_num) / 200), end=" ")
+    elif sample_num < 10000:
+        if sample_num == 7000:
+            print("Flexion")
+    elif sample_num < 12000:
+        print(int((12000 - sample_num) / 200), end=" ")
+    elif sample_num < 15000:
+        if sample_num == 12000:
+            print("Extension")
+    elif sample_num == 15000:
+        print("DONE")
 
 
 def create_board() -> BoardShim:
@@ -108,10 +106,10 @@ def create_board() -> BoardShim:
     return board
 
 
-def emg_data_acquisition(total_movements: int) -> None:
+def emg_data_acquisition() -> None:
     """ Reads data from the Mindrove armband an saves it into a csv file in the folder "emg_data/" to be used by the
         feature extraction function
-    :param total_movements: the number of movements to be classified
+
     :return: None
     """
     while True:
@@ -145,44 +143,33 @@ def emg_data_acquisition(total_movements: int) -> None:
 
         # Initialise sample counter
         sample = 0
-        print_movement(sample)
 
         # Start data stream
         board.start_stream()
 
-        # Sample each movement for 5000 samples: 2000 inactive, 3000 movement
-        while sample < total_movements*5000:
-            # Wait until Mindrove armband has 200 raw emg samples
+        # Sample for 30 seconds: Rest > Flexion > Extension
+        while sample < 15000:
             data_on_board = board.get_board_data_count()
             while data_on_board < 200:
                 data_on_board = board.get_board_data_count()
 
-            # Get 200 samples of only the emg channels (channels 0 - 7)
             data = board.get_board_data(200)[0:8]
 
-            # Increase the sample counter
             sample += 200
 
-            # For each channel of the EMG armband, apply filters to the raw emg data
             for channel in emg_channels:
-                # Detrend data: remove linear offsets caused by the surface contact electrodes
                 DataFilter.detrend(data[channel], DetrendOperations.CONSTANT.value)
-                # Bandpass Filter
                 DataFilter.perform_bandpass(data[channel], BoardShim.get_sampling_rate(BoardIds.MINDROVE_WIFI_BOARD),
-                                            225.0, 350.0, 5, FilterTypes.BUTTERWORTH.value, 0)
-                # Highpass Filter
+                                            51.0, 400.0, 5, FilterTypes.BUTTERWORTH.value, 0)
                 DataFilter.perform_highpass(data[channel], BoardShim.get_sampling_rate(BoardIds.MINDROVE_WIFI_BOARD),
                                             0.5, 1, FilterTypes.BUTTERWORTH.value, 0)
 
-            # Write emg data to disk
             file = open(file_name, 'a', newline='')
             writer = csv.writer(file)
             writer.writerows(data.transpose())
 
-            # Update movement interface
             print_movement(sample)
 
-        # End Mindrove armband streaming session
         board.stop_stream()
         board.release_session()
 
@@ -206,14 +193,14 @@ def read_csv(file_name: str, start_sample: int, end_sample: int, channels: list)
     :param channels: the list containing a list for each emg channel, to which the data will be extracted to
     :return: None
     """
-    number_of_channels = len(channels)
+    num_channels = len(channels)
     file = open(file_name)
     csv_reader = csv.reader(file)
 
     for i in range(end_sample):
         row = csv_reader.__next__()
         if i >= start_sample:
-            for j in range(number_of_channels):
+            for j in range(num_channels):
                 channels[j].append(float(row[j]))
 
     file.close()
@@ -223,7 +210,7 @@ def get_list_average(input_list: list) -> float:
     """ Finds the average of all values in a list
 
     :param input_list: the from which the average should be found
-    :return: float, corresponding to the average value of the list
+    :return: float
     """
     total = 0
     for items in input_list:
@@ -256,7 +243,7 @@ def f(x: float, y: float, offset: float) -> int:
     :param x: emg value for a single given sample
     :param y: emg value for the next sample following x
     :param offset: value used if the emg data has a constant offset.
-    :return: int, corresponding to the output of the function (either 0 or 1)
+    :return: int
     """
     xy = x * y
     if xy > offset:
@@ -272,18 +259,17 @@ def feature_extraction(sample_window: float, sample_range: int, channels: list) 
     :param sample_window: period of time from which a sample is taken (0.4 seconds)
     :param sample_range: range of sample values from the overall samples in the csv file
     :param channels: 2D list containing the emg data for each 8 channels of the Mindrove armband
-    :return: list, containing all the features extracted from the single sample window for all 8 channels of the
-             Mindrove armband
+    :return: list
     """
 
-    number_of_channels = len(channels)
+    num_channels = len(channels)
 
     mav = []    # Mean Absolute Value (MAV): the average value of the values sampled in the the sample window
     wl = []     # Waveform Length (WL): provides information on the waves amplitude, frequency and duration
     zc = []     # Zero Crossing (ZC): count the number of crosses by zero in the segment
     ssc = []    # Slope Sign Change (SSC): similar to the ZC feature but applied on the slope of the waveform
 
-    for i in range(number_of_channels):
+    for i in range(num_channels):
         mav_sum = 0
         wl_sum = 0
         zc_sum = 0
@@ -302,7 +288,7 @@ def feature_extraction(sample_window: float, sample_range: int, channels: list) 
         zc.append(zc_sum)
         ssc.append(ssc_sum)
 
-    # Normalisation of the features for input into the classifier algorithm
+    # Normalise
     normalised_mav = [elements / max(mav) for elements in mav]
     normalised_wl = [elements / max(wl) for elements in wl]
     normalised_zc = [elements / max(zc) for elements in zc]
@@ -320,7 +306,7 @@ def get_intervals(start: float, end: float, interval: float) -> list:
     :param start: starting value
     :param end: ending values
     :param interval: size of intervals between the start and end value
-    :return: list, containing the each incremental value from "start" to "end". E.g: [start, start+interval, ..., end]
+    :return: list
     """
     sample_range = end - start
     divisions = int(sample_range / interval)
@@ -335,103 +321,98 @@ def movement_encoding(label: str) -> int:
     """ Encodes movements into values using label encoding
 
     :param label: data label for a given data set
-    :return: int, label encoded label for a the given movement dataset
+    :return: int
     """
-    global movements
-    return movements.index(label)
+    if label == "Rest":
+        return 0
+    if label == "Extension":
+        return 1
+    if label == "Flexion":
+        return 2
+
+    return None
 
 
 def movement_decode(encoded_label: int) -> str:
     """ Decodes encoded data labels for better readability when printing
 
     :param encoded_label: encoded data label for a given data set
-    :return: str, corresponding string to the label encoded values
+    :return:
     """
-    global movements
-    return movements[encoded_label]
+    if encoded_label == 0:
+        return "Rest"
+    if encoded_label == 1:
+        return "Extension"
+    if encoded_label == 2:
+        return "Flexion"
+
+    return None
 
 
 def perform_feature_extraction() -> None:
     """ Using emg data stored in csv files, extracts emg features, and saves features into new emg files to be used
-        by the classification algorithm for training and testing.
-        The csv file of the raw emg data has the following layout:
-        |     INACTIVE   |   MOVEMENT 1   |  ...
-        | 2000 Samples   | 3000 Samples   |  ...
+        by the classification algorithm for training and testing
 
     :return: None
     """
-    global movements
-    global csv_heading
-    # Board specific variables (Mindrove WiFi board)
-    channel = [[], [], [], [], [], [], [], []]  # 8 emg channels on the Mindrove armband
-    sample_window_time = 0.4
+    channel = [[], [], [], [], [], [], [], []]
+    sample_window = 0.4
     sample_rate = 500
-    sample_window_samples = sample_window_time * sample_rate
+    emg_data = {
+        "Rest": [5, 9],
+        "Flexion": [15, 19],
+        "Extension": [25, 29]
+    }
 
-    # csv file path for emg data path
-    directory_path = 'emg_data/'
+    # EMG csv data path
+    dir_path = 'emg_data/'
 
-    # List to store files
-    folder = []
+    # list to store files
+    res = []
 
     # Iterate directory
-    for path in os.listdir(directory_path):
-        # Check if current path is a file
-        if os.path.isfile(os.path.join(directory_path, path)):
-            folder.append(path)
+    for path in os.listdir(dir_path):
+        # check if current path is a file
+        if os.path.isfile(os.path.join(dir_path, path)):
+            res.append(path)
+    print(res)
 
-    # Lists that will split raw emg data into training and testing data set (66:33)
     training_data = []
     testing_data = []
 
-    # Iterate each file in emg data directory
-    for files in folder:
-        # File names for reading
-        file_name = directory_path + files
+    for files in res:
+        file_name = 'emg_data/' + files
         print(files.center(80, "-"))
 
-        # Clear list for each iteration
         for items in channel:
             items.clear()
 
-        # For each specified movement in the global list "movements"
-        for movement in movements:
-            print(movement)
-
-            # Find the starting point for the movement in the emg csv file (see csv layout above)
-            index = movements.index(movement)
-            start_sample = 2000 + index*5000
-            end_sample = start_sample + 3000
+        for key, value in emg_data.items():
+            print(key)
+            start_sample = int(value[0] * sample_rate)
+            end_sample = int(value[1] * sample_rate)
             print(start_sample, end_sample)
 
-            # Get list of sample intervals based of the start and end points specified
-            sample_intervals = get_intervals(start_sample, end_sample, sample_window_samples)
+            sample_intervals = get_intervals(value[0], value[1], sample_window)
 
-            # For each interval
             for x in range(len(sample_intervals) - 1):
-                # Extract sub-intervals
-                start_sample = int(sample_intervals[x])
-                end_sample = int(sample_intervals[x + 1])
+                start_sample = int(sample_intervals[x] * sample_rate)
+                end_sample = int(sample_intervals[x + 1] * sample_rate)
                 sample_range = end_sample - start_sample
 
-                # Clear the channels of previous readings
                 for items in channel:
                     items.clear()
 
-                # Extract data from emg data file for each sample interval
                 read_csv(file_name, start_sample, end_sample, channel)
 
-                # Retrieve and save features from the data with corresponding label
-                features = feature_extraction(sample_window_time, sample_range, channel)
-                features.append((movement_encoding(movement)))
+                features = (feature_extraction(sample_window, sample_range, channel))
+                features.append((movement_encoding(key)))
 
-                # Split data 66:33 between training and testing data
                 if (x % 3) == 0:
                     testing_data.append(features)
                 else:
                     training_data.append(features)
 
-    # Randomly shuffle the training data and save into csv file (for better training)
     random.shuffle(training_data)
     file = open('feature_extraction/training.csv', 'w', newline='')
     writer = csv.writer(file)
@@ -440,7 +421,6 @@ def perform_feature_extraction() -> None:
         writer.writerow(items)
     file.close()
 
-    # Randomly shuffle the testing data and save into csv file
     random.shuffle(testing_data)
     file = open('feature_extraction/testing.csv', 'w', newline='')
     writer = csv.writer(file)
@@ -455,36 +435,16 @@ def perform_feature_extraction() -> None:
 """
 
 
-def convert_to_tf_lite(model: keras.models.Sequential) -> None:
-    """ Converts the trained tensorflow keras model to a tensorflow lite model that can be implemented on
-        microcontrollers
-
-    :param model: the tensorflow model to be converted
-    :return: None
-    """
-    # Convert the model to the TensorFlow Lite format with quantization
-    converter = tf.lite.TFLiteConverter.from_keras_model(model)
-    model_tflite = converter.convert()
-
-    # Save the model to disk
-    open('lite_model/model.tflite', "wb").write(model_tflite)
-
-
 def get_dataset(filename: str) -> tuple:
     """ Reads data from a csv file and saves it into a pandas dataframe, which is then converted to a numpy array for
         use by the tensorflow neural network classifier
 
     :param filename: file name of the csv from which the data will be extracted from
-    :return: tuple containing two numpy arrays corresponding to the data from the feature extraction and their
-             corresponding labels
+    :return: tuple
     """
-    # Create a pandas dataframe from the data in the training or testing data
     emg_data = pd.read_csv(filename)
-
-    # Create separate dataframe for the labels of the data
     emg_labels = emg_data.pop("Movement")
 
-    # Convert both dataframes to numpy arrays to be used by the TensorFlow classifier
     emg_data = np.array(emg_data)
     emg_labels = np.array(emg_labels)
 
@@ -497,24 +457,19 @@ def create_model() -> keras.models.Sequential:
         32 nodes. The number of nodes in the hidden layer can be adjusted according to performance requirements. The
         number of nodes in the output layer needs to correspond to the number of movements being classified
 
-    :return: keras.models.Sequential, the neural network model created by the tensorFlow API
+    :return: keras.models.Sequential
     """
-    global movements
-    # Create TensorFlow model structure
     model = keras.models.Sequential([
         keras.layers.Dense(32, input_shape=(32,)),
         keras.layers.Dense(64, activation='relu'),
-        keras.layers.Dense(len(movements)),
+        keras.layers.Dense(3),
     ])
 
-    # Set the "Loss" and "Optimiser" Functions
+    # loss and optimiser
     loss = keras.losses.SparseCategoricalCrossentropy(from_logits=True)  # soft max
     optimizer = keras.optimizers.Adam(learning_rate=0.01)  # Learning Rate
-
-    # Set metrics to be printed to the terminal
     metrics = ["accuracy"]
 
-    # Create the model
     model.compile(loss=loss, optimizer=optimizer, metrics=metrics)
 
     return model
@@ -529,12 +484,13 @@ def train_classifier(x_train: np.array, y_train: np.array, x_test: np.array, y_t
     :param y_test: labels for the emg feature data used in the testing process
     :return: None
     """
-    global epochs
-    global batch_size
     # Build the model
     classifier_model = create_model()
 
-    # Start the training of the neural network
+    batch_size = 10
+    epochs = 10
+
+    # Start the training
     print("TRAINING".center(80, "-"))
     classifier_model.fit(x_train, y_train, batch_size=batch_size, epochs=epochs, shuffle=True, verbose=2)
 
@@ -542,12 +498,15 @@ def train_classifier(x_train: np.array, y_train: np.array, x_test: np.array, y_t
     classifier_model.get_weights()
     classifier_model.save_weights('classification_model/emg_classifier_weights.h5')
 
-    # Save tf lite version of model for embedded systems
-    convert_to_tf_lite(model=classifier_model)
-
     # Evaluate Model
     print("EVALUATING MODEL".center(80, "-"))
     classifier_model.evaluate(x_test, y_test, verbose=2)
+
+    predictions = classifier_model(x_test)
+    predictions = tf.nn.softmax(predictions)
+    first_twenty_predictions = predictions[0:20]
+    print("Predictions\t", np.argmax(first_twenty_predictions, axis=1))
+    print("Answers\t", y_test[0:20])
 
 
 """
@@ -561,11 +520,10 @@ def test_classifier(test_duration_seconds: int) -> None:
     :param test_duration_seconds: duration for which testing should occur
     :return: None
     """
-    # Create a new model and load previously saved weights from the trained model
-    test_model = create_model()
-    test_model.load_weights("classification_model/emg_classifier_weights.h5")
+    new_model = create_model()
 
-    # Initiate countdown to inform user that testing will begin
+    new_model.load_weights("classification_model/emg_classifier_weights.h5")
+
     timer_countdown(3, "EMG READING INITIATED")
 
     # Prepare board for data logging session (NOTE: The armband starts saving data from this point on ward)
@@ -573,72 +531,47 @@ def test_classifier(test_duration_seconds: int) -> None:
     board.disable_board_logger()  # Removes annoying Mindrove Json object terminal logging :)
     emg_channels = board.get_emg_channels(BoardIds.MINDROVE_WIFI_BOARD)
 
-    # Prepare Mindrove armband for data streaming
     board.prepare_session()
     while not board.is_prepared():
         pass
 
-    # Start mindrove armband data stream
+    # Start data stream
     board.start_stream()
+    t_start = time.perf_counter()
+    t_end = time.perf_counter()
 
-    # Initiate timers
-    time_start = time.perf_counter()
-    time_end = time.perf_counter()
-
-    while (time_end - time_start) < test_duration_seconds:
-        # Wait until Mindrove armband has 200 raw emg samples
+    while (t_end - t_start) < test_duration_seconds:
         data_on_board = board.get_board_data_count()
         while data_on_board < 200:
             data_on_board = board.get_board_data_count()
 
-        # Get 200 samples of only the emg channels (channels 0 - 7)
         data = board.get_board_data(200)[0:8]
 
-        # For each channel of the EMG armband, apply filters to the raw emg data
         for channel in emg_channels:
-            # Detrend data: remove linear offsets caused by the surface contact electrodes
             DataFilter.detrend(data[channel], DetrendOperations.CONSTANT.value)
-            # Bandpass Filter
             DataFilter.perform_bandpass(data[channel], BoardShim.get_sampling_rate(BoardIds.MINDROVE_WIFI_BOARD),
-                                        225.0, 350.0, 5, FilterTypes.BUTTERWORTH.value, 0)
-            # Highpass Filter
+                                        51.0, 400.0, 5, FilterTypes.BUTTERWORTH.value, 0)
             DataFilter.perform_highpass(data[channel], BoardShim.get_sampling_rate(BoardIds.MINDROVE_WIFI_BOARD),
                                         0.5, 1, FilterTypes.BUTTERWORTH.value, 0)
 
-        # Get Features from data
         features = feature_extraction(0.4, 200, data[0:8])
         np_features = np.array([features])
-
-        # Make prediction using Neural Network classifier
-        val = np.argmax(test_model(np_features), axis=1)[0]
-
-        # Decode and display prediction
-        str_val = movement_decode(int(val))
+        val = np.argmax(new_model(np_features), axis=1)
+        str_val = movement_decode(val)
         print(str_val)
 
-        # Update Timer
-        time_end = time.perf_counter()
+        t_end = time.perf_counter()
 
-    # End Mindrove armband streaming session
     board.stop_stream()
     board.release_session()
-    print("Done")
 
 
 """
 ======================================= MAIN FUNCTION =======================================
 """
 
-
-def main() -> None:
-    """ Main loop of the python program. State machine that controls program flow
-
-    :return: None
-    """
-    global movements
-
-    number_of_movements = len(movements)
-    startup_print(startup=True)
+if __name__ == "__main__":
+    startup_print(True)
     while True:
         print(''.center(80, '-'))
 
@@ -646,9 +579,7 @@ def main() -> None:
 
         if user_in == "1":
             print('CLASSIFIER TRAINING'.center(80, ' '))
-
-            emg_data_acquisition(total_movements=number_of_movements)
-
+            emg_data_acquisition()
             perform_feature_extraction()
 
             data_train, label_train = get_dataset(
@@ -657,20 +588,11 @@ def main() -> None:
                 "feature_extraction/testing.csv")
 
             print("Input data shape", data_train.shape, label_train.shape)
-
             train_classifier(data_train, label_train, data_test, label_test)
-
         elif user_in == "2":
             print('CLASSIFIER TESTING'.center(80, ' '))
-
-            test_classifier(test_duration_seconds=30)
+            test_classifier(30)
         else:
-            print("Closing program")
             quit()
-
         time.sleep(5)
-        startup_print(startup=False)
-
-
-if __name__ == "__main__":
-    main()
+        startup_print(False)
