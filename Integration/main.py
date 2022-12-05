@@ -1,7 +1,7 @@
 """
 TOUCH PROSTHETICS - EMG CLASSIFICATION SYSTEM
     Author: Daniel Ingham
-    Last Revision: 2022/12/02
+    Last Revision: 2022/12/05
     See Mindrove API documentation for armband API information: https://docs.mindrove.com/UserAPI.html
 """
 
@@ -16,6 +16,13 @@ import tensorflow as tf
 from mindrove.board_shim import BoardShim, MindRoveInputParams, BoardIds
 from mindrove.data_filter import DataFilter, FilterTypes, DetrendOperations
 from tensorflow import keras
+
+
+movements = ["Rest", "Flexion", "Extension", "Wrist Abduction"]
+
+# Set the batch size and number of epochs the program should use when training
+batch_size = 10
+epochs = 50
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
@@ -71,6 +78,7 @@ def print_movement(number_of_samples: int) -> None:
     :type number_of_samples: int
     :return: None
     """
+    global movements
     index = 0
     if number_of_samples != 5000*len(movements):
         for _ in movements:
@@ -161,7 +169,7 @@ def emg_data_acquisition(total_movements: int) -> None:
                 DataFilter.detrend(data[channel], DetrendOperations.CONSTANT.value)
                 # Bandpass Filter
                 DataFilter.perform_bandpass(data[channel], BoardShim.get_sampling_rate(BoardIds.MINDROVE_WIFI_BOARD),
-                                            51.0, 400.0, 5, FilterTypes.BUTTERWORTH.value, 0)
+                                            225.0, 350.0, 5, FilterTypes.BUTTERWORTH.value, 0)
                 # Highpass Filter
                 DataFilter.perform_highpass(data[channel], BoardShim.get_sampling_rate(BoardIds.MINDROVE_WIFI_BOARD),
                                             0.5, 1, FilterTypes.BUTTERWORTH.value, 0)
@@ -329,6 +337,7 @@ def movement_encoding(label: str) -> int:
     :param label: data label for a given data set
     :return: int, label encoded label for a the given movement dataset
     """
+    global movements
     return movements.index(label)
 
 
@@ -338,6 +347,7 @@ def movement_decode(encoded_label: int) -> str:
     :param encoded_label: encoded data label for a given data set
     :return: str, corresponding string to the label encoded values
     """
+    global movements
     return movements[encoded_label]
 
 
@@ -350,8 +360,10 @@ def perform_feature_extraction() -> None:
 
     :return: None
     """
+    global movements
+    global csv_heading
     # Board specific variables (Mindrove WiFi board)
-    channel = [[], [], [], [], [], [], [], []] # 8 emg channels
+    channel = [[], [], [], [], [], [], [], []]  # 8 emg channels on the Mindrove armband
     sample_window_time = 0.4
     sample_rate = 500
     sample_window_samples = sample_window_time * sample_rate
@@ -377,33 +389,42 @@ def perform_feature_extraction() -> None:
         # File names for reading
         file_name = directory_path + files
         print(files.center(80, "-"))
+
         # Clear list for each iteration
         for items in channel:
             items.clear()
+
         # For each specified movement in the global list "movements"
         for movement in movements:
             print(movement)
+
             # Find the starting point for the movement in the emg csv file (see csv layout above)
             index = movements.index(movement)
             start_sample = 2000 + index*5000
             end_sample = start_sample + 3000
             print(start_sample, end_sample)
+
             # Get list of sample intervals based of the start and end points specified
             sample_intervals = get_intervals(start_sample, end_sample, sample_window_samples)
+
             # For each interval
             for x in range(len(sample_intervals) - 1):
                 # Extract sub-intervals
                 start_sample = int(sample_intervals[x])
                 end_sample = int(sample_intervals[x + 1])
                 sample_range = end_sample - start_sample
+
                 # Clear the channels of previous readings
                 for items in channel:
                     items.clear()
+
                 # Extract data from emg data file for each sample interval
                 read_csv(file_name, start_sample, end_sample, channel)
+
                 # Retrieve and save features from the data with corresponding label
                 features = feature_extraction(sample_window_time, sample_range, channel)
                 features.append((movement_encoding(movement)))
+
                 # Split data 66:33 between training and testing data
                 if (x % 3) == 0:
                     testing_data.append(features)
@@ -435,10 +456,10 @@ def perform_feature_extraction() -> None:
 
 
 def convert_to_tf_lite(model: keras.models.Sequential) -> None:
-    """
+    """ Converts the trained tensorflow keras model to a tensorflow lite model that can be implemented on
+        microcontrollers
 
-    :param model:
-    :param training_data:
+    :param model: the tensorflow model to be converted
     :return: None
     """
     # Convert the model to the TensorFlow Lite format with quantization
@@ -478,6 +499,7 @@ def create_model() -> keras.models.Sequential:
 
     :return: keras.models.Sequential, the neural network model created by the tensorFlow API
     """
+    global movements
     # Create TensorFlow model structure
     model = keras.models.Sequential([
         keras.layers.Dense(32, input_shape=(32,)),
@@ -507,12 +529,10 @@ def train_classifier(x_train: np.array, y_train: np.array, x_test: np.array, y_t
     :param y_test: labels for the emg feature data used in the testing process
     :return: None
     """
+    global epochs
+    global batch_size
     # Build the model
     classifier_model = create_model()
-
-    # Set the batch size and number of epochs the program should use when training
-    batch_size = 10
-    epochs = 50
 
     # Start the training of the neural network
     print("TRAINING".center(80, "-"))
@@ -580,7 +600,7 @@ def test_classifier(test_duration_seconds: int) -> None:
             DataFilter.detrend(data[channel], DetrendOperations.CONSTANT.value)
             # Bandpass Filter
             DataFilter.perform_bandpass(data[channel], BoardShim.get_sampling_rate(BoardIds.MINDROVE_WIFI_BOARD),
-                                        51.0, 400.0, 5, FilterTypes.BUTTERWORTH.value, 0)
+                                        225.0, 350.0, 5, FilterTypes.BUTTERWORTH.value, 0)
             # Highpass Filter
             DataFilter.perform_highpass(data[channel], BoardShim.get_sampling_rate(BoardIds.MINDROVE_WIFI_BOARD),
                                         0.5, 1, FilterTypes.BUTTERWORTH.value, 0)
@@ -602,13 +622,12 @@ def test_classifier(test_duration_seconds: int) -> None:
     # End Mindrove armband streaming session
     board.stop_stream()
     board.release_session()
+    print("Done")
 
 
 """
 ======================================= MAIN FUNCTION =======================================
 """
-movements = ["Rest", "Flexion", "Extension", "Wrist Abduction"]
-number_of_movements = len(movements)
 
 
 def main() -> None:
@@ -616,6 +635,9 @@ def main() -> None:
 
     :return: None
     """
+    global movements
+
+    number_of_movements = len(movements)
     startup_print(startup=True)
     while True:
         print(''.center(80, '-'))
@@ -625,9 +647,9 @@ def main() -> None:
         if user_in == "1":
             print('CLASSIFIER TRAINING'.center(80, ' '))
 
-            # emg_data_acquisition(total_movements=number_of_movements)
-            #
-            # perform_feature_extraction()
+            emg_data_acquisition(total_movements=number_of_movements)
+
+            perform_feature_extraction()
 
             data_train, label_train = get_dataset(
                 "feature_extraction/training.csv")
